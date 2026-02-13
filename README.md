@@ -6,7 +6,7 @@ A tiny macOS menu bar app that tracks **one topic** ("AI engineering processes +
 
 ## Install (macOS app – recommended)
 
-1. Download **Signal Scout.app.zip** from the [latest GitHub release](https://github.com/your-username/signal-scout/releases/latest).
+1. Download **Signal Scout.app.zip** from the [latest GitHub release](https://github.com/psalt21/signal-scout/releases/latest).
 2. Unzip it. You'll see `Signal Scout.app`.
 3. Drag it to your **Applications** folder (or just double-click from Downloads).
 4. **First launch:** Right-click the app → **Open** (macOS Gatekeeper will ask you to confirm once since the app isn't notarized).
