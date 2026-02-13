@@ -2,6 +2,10 @@
 
 import os
 
+# ── App identity ──────────────────────────────────────────────────────────────
+APP_VERSION = "0.1.0"
+GITHUB_REPO = "psalt21/signal-scout"  # owner/repo for update checks
+
 # ── Topic ────────────────────────────────────────────────────────────────────
 TOPIC_NAME = "AI process + productivity systems"
 KEYWORDS = [

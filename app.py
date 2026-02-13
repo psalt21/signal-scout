@@ -12,10 +12,14 @@ from datetime import datetime
 import rumps
 
 from collector import fetch_feeds
+import requests as http_requests  # renamed to avoid shadowing
+
 from config import (
+    APP_VERSION,
     DB_PATH,
     DIGEST_PORT,
     FEEDS,
+    GITHUB_REPO,
     ITEM_MAX_AGE_DAYS,
     KEYWORDS,
     LLM_API_KEY,
@@ -50,21 +54,29 @@ class SignalScoutApp(rumps.App):
         # Thread-safe status: background threads write here,
         # a main-thread timer reads it and updates the menu item.
         self._pending_status = None
+        self._pending_update_label = None
         self._status_lock = threading.Lock()
+
+        # Update check state
+        self._latest_version = None
+        self._download_url = None
 
         # Menu items
         self.status_item = rumps.MenuItem("Not yet refreshed")
+        self.update_item = rumps.MenuItem(f"v{APP_VERSION} – up to date")
         self.auto_toggle = rumps.MenuItem("Auto-refresh (60 min)")
         self.auto_toggle.state = True
 
         self.menu = [
             self.status_item,
+            self.update_item,
             None,
             "Refresh Now",
             "Open Digest",
             None,
             self.auto_toggle,
             "Set API Key…",
+            "Check for Updates",
             "Settings…",
             None,
             "Quit Signal Scout",
@@ -84,6 +96,9 @@ class SignalScoutApp(rumps.App):
         # Kick off first refresh immediately
         threading.Thread(target=self._do_refresh, daemon=True).start()
 
+        # Check for updates on startup (non-blocking)
+        threading.Thread(target=self._check_for_updates, daemon=True).start()
+
     # ── LLM key resolution ───────────────────────────────────────────────
 
     def _get_llm_key(self):
@@ -100,11 +115,62 @@ class SignalScoutApp(rumps.App):
             self._pending_status = text
 
     def _sync_status(self, _sender):
-        """Runs on the main thread via rumps.Timer – applies pending status."""
+        """Runs on the main thread via rumps.Timer – applies pending UI changes."""
         with self._status_lock:
             if self._pending_status is not None:
                 self.status_item.title = self._pending_status
                 self._pending_status = None
+            if self._pending_update_label is not None:
+                self.update_item.title = self._pending_update_label
+                self._pending_update_label = None
+
+    # ── Update checker ────────────────────────────────────────────────────
+
+    def _check_for_updates(self):
+        """Hit the GitHub releases API and compare versions."""
+        try:
+            resp = http_requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                timeout=10,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            if resp.status_code != 200:
+                return
+            data = resp.json()
+            tag = data.get("tag_name", "").lstrip("v")
+            if not tag:
+                return
+
+            if self._version_newer(tag, APP_VERSION):
+                self._latest_version = tag
+                # Find the zip asset download URL
+                for asset in data.get("assets", []):
+                    if asset["name"].endswith(".zip"):
+                        self._download_url = asset["browser_download_url"]
+                        break
+                if not self._download_url:
+                    self._download_url = data.get("html_url", "")
+
+                # Queue a main-thread menu update
+                with self._status_lock:
+                    self._pending_update_label = f"Update available: v{tag}"
+                logger.info("Update available: v%s (current: v%s)", tag, APP_VERSION)
+            else:
+                with self._status_lock:
+                    self._pending_update_label = f"v{APP_VERSION} – up to date"
+                logger.info("No update available (latest: v%s)", tag)
+        except Exception as exc:
+            logger.debug("Update check failed: %s", exc)
+
+    @staticmethod
+    def _version_newer(remote, local):
+        """Return True if remote version string is newer than local."""
+        try:
+            r = tuple(int(x) for x in remote.split("."))
+            l = tuple(int(x) for x in local.split("."))
+            return r > l
+        except (ValueError, AttributeError):
+            return False
 
     # ── Timer callback ───────────────────────────────────────────────────
 
@@ -183,6 +249,28 @@ class SignalScoutApp(rumps.App):
     def on_toggle_auto(self, sender):
         self.auto_refresh_on = not self.auto_refresh_on
         sender.state = self.auto_refresh_on
+
+    @rumps.clicked("Check for Updates")
+    def on_check_updates(self, _sender):
+        threading.Thread(target=self._check_for_updates, daemon=True).start()
+        if self._latest_version and self._download_url:
+            resp = rumps.alert(
+                title=f"Signal Scout v{self._latest_version} Available",
+                message=(
+                    f"You're running v{APP_VERSION}.\n"
+                    f"Version {self._latest_version} is available.\n\n"
+                    "Click OK to open the download page."
+                ),
+                ok="Download",
+                cancel="Later",
+            )
+            if resp == 1:  # OK / Download
+                webbrowser.open(self._download_url)
+        else:
+            rumps.alert(
+                title="No Update Available",
+                message=f"You're running the latest version (v{APP_VERSION}).",
+            )
 
     @rumps.clicked("Set API Key…")
     def on_set_api_key(self, _sender):
